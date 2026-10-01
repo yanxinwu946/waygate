@@ -1,0 +1,38 @@
+﻿__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# ---- local-only debugging / deployment scripts, not part of the project ----
+*.bak
+*.bak.*
+tools/
+tests/
+
+# ---- secrets: device identities carry private keys + client certificates ----
+identity*.json
+*identity-masque*.json
+*.pem
+*.key
+.waygate/
+.warp2s5/
+
+# ---- test / tooling artifacts ----
+*.exe
+*.log
+*.err
+_probe/
+tests/*.json
+_w2.log
+_w2.err
+_webui_test.log
+_webui_test.err
+*.cmd
+
+# ---- captured qlogs (large, machine specific) ----
+_qlog/
+_myqlog/
+*.sqlog
