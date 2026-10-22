@@ -35,24 +35,92 @@ from .warp import (
 
 log = logging.getLogger("waygate.scan")
 
-#: a few extra anycast addresses seen in the wild
-EXTRA_V4 = ("162.159.198.3", "162.159.197.3")
-EXTRA_V6 = ("2606:4700:103::3", "2606:4700:103::4")
+#: extra anycast addresses seen in the wild, beyond the official MASQUE pair.
+#: 198.9–.16 includes the H2 backend .10 reported by Xray; 199.3–.8 is WARP+.
+EXTRA_V4 = (
+    "162.159.198.3", "162.159.198.4", "162.159.198.5", "162.159.198.6",
+    "162.159.198.7", "162.159.198.8",
+    "162.159.198.9", "162.159.198.10", "162.159.198.11", "162.159.198.12",
+    "162.159.198.13", "162.159.198.14", "162.159.198.15", "162.159.198.16",
+    "162.159.199.3", "162.159.199.4", "162.159.199.5", "162.159.199.6",
+    "162.159.199.7", "162.159.199.8",
+    "162.159.197.3", "162.159.197.4", "162.159.197.5", "162.159.197.6",
+    "162.159.197.7", "162.159.197.8",
+    "162.159.192.1", "162.159.192.8",
+    "162.159.193.1", "162.159.195.1",
+    "162.159.204.1",
+    "188.114.96.1", "188.114.97.1", "188.114.98.1", "188.114.99.1",
+)
+EXTRA_V6 = (
+    "2606:4700:103::3", "2606:4700:103::4",
+    "2606:4700:103::5", "2606:4700:103::6",
+    "2606:4700:103::7", "2606:4700:103::8",
+    "2606:4700:104::3", "2606:4700:104::4",
+    "2606:4700:104::5", "2606:4700:104::6",
+    "2606:4700:104::7", "2606:4700:104::8",
+)
 
-
-#: the ranges Cloudflare actually serves WARP from (the classic yxip list)
+#: Cloudflare WARP anycast prefixes (WireGuard + MASQUE share the same blocks)
 SCAN_RANGES_V4 = (
     "162.159.192.0/24",
     "162.159.193.0/24",
+    "162.159.194.0/24",
     "162.159.195.0/24",
+    "162.159.196.0/24",
     "162.159.197.0/24",
     "162.159.198.0/24",
+    "162.159.199.0/24",
     "162.159.204.0/24",
     "188.114.96.0/24",
     "188.114.97.0/24",
     "188.114.98.0/24",
     "188.114.99.0/24",
 )
+
+#: MASQUE H2 answers on the whole of these /24s (warpscout); QUIC on .1/.2.
+MASQUE_EXIT_RANGES_V4 = (
+    "162.159.198.0/24",
+    "162.159.199.0/24",
+)
+
+#: ports used by the expanded profile (443 first; 4443 is an official MASQUE fallback)
+EXPANDED_PORTS = (443, 500, 1701, 4500, 4443, 8095, 8443, 2408)
+RANGE_PORTS = (443,)
+RANGE_WIDE_PORTS = (443, 500, 2408)
+
+SCAN_PROFILES = {
+    "curated": {
+        "label": "精选任播",
+        "hint": "官方 MASQUE 地址与备用端口，扫描最快。",
+    },
+    "expanded": {
+        "label": "扩展任播",
+        "hint": "精选地址加上更多已知任播与常用端口。",
+    },
+    "range": {
+        "label": "WARP 网段",
+        "hint": "全部 WARP IPv4 /24 与 443 端口交叉，耗时约数分钟。",
+    },
+    "range_wide": {
+        "label": "全量交叉",
+        "hint": "全部网段乘以 443/500/2408，候选最多，耗时最长。",
+    },
+}
+
+
+def _family_of(host: str) -> str:
+    try:
+        return "v6" if ipaddress.ip_address(host).version == 6 else "v4"
+    except ValueError:
+        return "v4"
+
+
+def _filter_family(
+    targets: list[tuple[str, int]], family: str
+) -> list[tuple[str, int]]:
+    if family not in ("v4", "v6"):
+        return targets
+    return [(host, port) for host, port in targets if _family_of(host) == family]
 
 
 def expand_ranges(ranges: tuple[str, ...] = SCAN_RANGES_V4,
@@ -70,6 +138,15 @@ def expand_ranges(ranges: tuple[str, ...] = SCAN_RANGES_V4,
     return out
 
 
+def _port_major(hosts: list[str], ports: list[int]) -> list[tuple[str, int]]:
+    ordered: dict[tuple[str, int], None] = {}
+    for port in ports:
+        for host in hosts:
+            if host:
+                ordered.setdefault((host, port), None)
+    return list(ordered)
+
+
 def candidate_endpoints(preferred: Optional[str] = None) -> list[tuple[str, int]]:
     """Ordered *port-major*: port 443 across every host first, then 500, and so on.
 
@@ -84,11 +161,134 @@ def candidate_endpoints(preferred: Optional[str] = None) -> list[tuple[str, int]
         if h
     ]
     ports = [443, *[p for p in MASQUE_PORTS if p != 443]]
-    ordered: dict[tuple[str, int], None] = {}
-    for port in ports:
-        for host in hosts:
-            ordered.setdefault((host, port), None)
-    return list(ordered)
+    return _port_major(hosts, ports)
+
+
+def expanded_endpoints(preferred: Optional[str] = None) -> list[tuple[str, int]]:
+    """Curated MASQUE hosts plus extra anycast, crossed with the expanded ports."""
+    hosts = [
+        h
+        for h in (
+            preferred,
+            *MASQUE_ENDPOINTS_V6,
+            *MASQUE_ENDPOINTS_V4,
+            *EXTRA_V6,
+            *EXTRA_V4,
+        )
+        if h
+    ]
+    return _port_major(hosts, list(EXPANDED_PORTS))
+
+
+def parse_ports(value) -> list[int]:
+    """Accept a list, a comma-separated string, or a single int."""
+    if value is None or value == "":
+        return []
+    if isinstance(value, int):
+        return [value] if 1 <= value <= 65535 else []
+    if isinstance(value, (list, tuple)):
+        raw = value
+    else:
+        raw = str(value).replace(" ", "").split(",")
+    out: list[int] = []
+    seen: set[int] = set()
+    for item in raw:
+        try:
+            port = int(item)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= port <= 65535 and port not in seen:
+            seen.add(port)
+            out.append(port)
+    return out
+
+
+def parse_ranges(value) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, str):
+        items = [part.strip() for part in value.replace(";", ",").split(",")]
+    elif isinstance(value, (list, tuple)):
+        items = [str(part).strip() for part in value]
+    else:
+        return []
+    out: list[str] = []
+    for item in items:
+        if not item:
+            continue
+        try:
+            ipaddress.ip_network(item, strict=False)
+        except ValueError:
+            continue
+        out.append(item)
+    return out
+
+
+def build_targets(
+    profile: str = "curated",
+    *,
+    family: str = "both",
+    ports: Optional[list[int]] = None,
+    ranges: Optional[list[str]] = None,
+    preferred: Optional[str] = None,
+) -> list[tuple[str, int]]:
+    """Materialize the candidate list for a named scan profile."""
+    profile = profile if profile in SCAN_PROFILES else "curated"
+    port_list = ports or []
+    if profile == "curated":
+        targets = candidate_endpoints(preferred)
+        if port_list:
+            hosts = list(dict.fromkeys(host for host, _ in targets))
+            targets = _port_major(hosts, port_list)
+    elif profile == "expanded":
+        targets = expanded_endpoints(preferred)
+        if port_list:
+            hosts = list(dict.fromkeys(host for host, _ in targets))
+            targets = _port_major(hosts, port_list)
+    elif profile == "range_wide":
+        cidrs = tuple(ranges) if ranges else SCAN_RANGES_V4
+        targets = expand_ranges(cidrs, tuple(port_list or RANGE_WIDE_PORTS))
+    else:  # range
+        cidrs = tuple(ranges) if ranges else SCAN_RANGES_V4
+        targets = expand_ranges(cidrs, tuple(port_list or RANGE_PORTS))
+    return _filter_family(targets, family)
+
+
+def format_endpoint(host: str, port: int = 443) -> str:
+    host = (host or "").strip()
+    if not host:
+        return ""
+    if ":" in host and not host.startswith("["):
+        return f"[{host}]:{port}"
+    return f"{host}:{port}"
+
+
+def official_masque_endpoints() -> list[tuple[str, int]]:
+    """Account-type anycast only: WARP / WARP+ / Zero Trust .1 and .2."""
+    ordered: dict[str, int] = {}
+    for host in (*MASQUE_ENDPOINTS_V4, *MASQUE_ENDPOINTS_V6):
+        ordered.setdefault(host, 443)
+    return [(host, port) for host, port in ordered.items()]
+
+
+def unique_endpoint_pool(min_hosts: int = 0) -> list[tuple[str, int]]:
+    """Curated MASQUE hosts for placement fallback. Not a padded /24.
+
+    Live scan results override this list. QUIC is proven on ``.1`` / ``.2`` of
+    each account block; extra 198/199/197 addresses are field reports, not a
+    generated sequence.
+    """
+    ordered: dict[str, int] = {}
+    for host, port in official_masque_endpoints():
+        ordered.setdefault(host, port)
+    for host in EXTRA_V4:
+        if host.startswith(("162.159.198.", "162.159.199.", "162.159.197.")):
+            ordered.setdefault(host, 443)
+    for host in EXTRA_V6:
+        ordered.setdefault(host, 443)
+    if min_hosts > 0:
+        return list(ordered.items())[:max(min_hosts, len(ordered))]
+    return [(host, port) for host, port in ordered.items()]
 
 
 def dns_probe_packet_legacy(src: str) -> bytes:  # kept for compatibility
@@ -178,6 +378,10 @@ class EndpointScanner:
         concurrency: int = 60,
         stagger: float = 0.0,
         whole_range: bool = False,
+        profile: str = "curated",
+        family: str = "both",
+        ports: Optional[list[int]] = None,
+        ranges: Optional[list[str]] = None,
     ) -> None:
         self.identity_path = Path(identity_path)
         self.timeout = timeout
@@ -190,6 +394,11 @@ class EndpointScanner:
         #: the same two anycast addresses come back - the wide ranges serve
         #: WireGuard, not MASQUE.  Off by default.
         self.whole_range = whole_range
+        self.profile = "range" if whole_range else (profile if profile in SCAN_PROFILES else "curated")
+        self.family = family if family in ("v4", "v6", "both") else "both"
+        self.ports = list(ports or [])
+        self.ranges = list(ranges or [])
+        self.last_submitted: dict = {}
         #: set by the "stop" button in the web UI
         self.stop_requested = False
         #: how the survivors of the cheap first pass are scored
@@ -200,8 +409,41 @@ class EndpointScanner:
         self.scanning = False
         self.started_at: Optional[float] = None
         self.finished_at: Optional[float] = None
+        self.started_at_unix: Optional[float] = None
+        self.finished_at_unix: Optional[float] = None
         self.error = ""
         self.total = 0
+
+    def configure(
+        self,
+        *,
+        profile: Optional[str] = None,
+        family: Optional[str] = None,
+        ports=None,
+        ranges=None,
+        concurrency: Optional[int] = None,
+        whole_range: Optional[bool] = None,
+    ) -> None:
+        """Update scan options. Ignored while a scan is already running."""
+        if self.scanning:
+            return
+        if profile is not None:
+            self.profile = profile if profile in SCAN_PROFILES else "curated"
+        if family is not None:
+            self.family = family if family in ("v4", "v6", "both") else "both"
+        if ports is not None:
+            self.ports = parse_ports(ports)
+        if ranges is not None:
+            self.ranges = parse_ranges(ranges)
+        if concurrency is not None:
+            try:
+                self.concurrency = max(1, min(int(concurrency), 200))
+            except (TypeError, ValueError):
+                pass
+        if whole_range is not None:
+            self.whole_range = bool(whole_range)
+            if self.whole_range and self.profile == "curated":
+                self.profile = "range"
 
     def request_stop(self) -> None:
         """Emergency stop.
@@ -247,6 +489,17 @@ class EndpointScanner:
                 else None
             ),
             "error": self.error,
+            "profile": self.profile,
+            "family": self.family,
+            "ports": list(self.ports),
+            "ranges": list(self.ranges),
+            "concurrency": self.concurrency,
+            "started_at": self.started_at_unix,
+            "finished_at": self.finished_at_unix,
+            "submitted": dict(self.last_submitted),
+            "profiles": {
+                key: {"id": key, **meta} for key, meta in SCAN_PROFILES.items()
+            },
         }
 
     # ------------------------------------------------------------------- work
@@ -259,15 +512,33 @@ class EndpointScanner:
         self.error = ""
         self.started_at = time.monotonic()
         self.finished_at = None
+        self.started_at_unix = time.time()
+        self.finished_at_unix = None
         try:
             identity = await load_or_register_masque(self.identity_path)
             if candidates:
                 targets = candidates
-            elif self.whole_range:
+            elif self.whole_range and self.profile == "curated":
                 targets = expand_ranges()
             else:
-                targets = candidate_endpoints()
+                targets = build_targets(
+                    self.profile,
+                    family=self.family,
+                    ports=self.ports or None,
+                    ranges=self.ranges or None,
+                )
+            if self.family in ("v4", "v6"):
+                targets = _filter_family(targets, self.family)
             self.total = len(targets)
+            self.last_submitted = {
+                "profile": self.profile,
+                "family": self.family,
+                "ports": list(self.ports),
+                "ranges": list(self.ranges),
+                "concurrency": self.concurrency,
+                "total": self.total,
+                "at": self.started_at_unix,
+            }
             log.info("scanning %d candidates at concurrency %d ...",
                      len(targets), self.concurrency)
             self.results = []
@@ -322,6 +593,7 @@ class EndpointScanner:
             self.scanning = False
             self._task = None
             self.finished_at = time.monotonic()
+            self.finished_at_unix = time.time()
             log.info("scan finished: %d/%d live in %.1fs",
                      sum(1 for r in self.results if r["live"]), len(self.results),
                      (self.finished_at - self.started_at) if self.started_at else 0.0)

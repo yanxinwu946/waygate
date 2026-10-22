@@ -39,15 +39,28 @@ USER_AGENT_MASQUE = "WARP for Android"
 
 #: SNI of the consumer MASQUE endpoint
 MASQUE_SNI = "consumer-masque.cloudflareclient.com"
-#: anycast addresses the MASQUE endpoint lives on (the official client uses 162.159.198.2)
-MASQUE_ENDPOINTS_V4 = ("162.159.198.2", "162.159.198.1", "162.159.197.2", "162.159.197.1")
+#: anycast addresses the MASQUE endpoint lives on.
+#: Account type → IPv4 / IPv6 (Xray Warp docs, Cloudflare One firewall):
+#:   WARP        162.159.198.2  /  2606:4700:103::2
+#:   WARP+       162.159.199.2  /  2606:4700:104::2
+#:   Zero Trust  162.159.197.2  /  2606:4700:102::2
+#: QUIC answers on .1 and .2 of each block; H2 answers on the whole /24.
+MASQUE_ENDPOINTS_V4 = (
+    "162.159.198.2", "162.159.198.1",
+    "162.159.199.2", "162.159.199.1",
+    "162.159.197.2", "162.159.197.1",
+)
 #: IPv6 anycast - on censored networks the v6 path to Cloudflare is often
 #: filtered much less than v4 (verified on China Telecom: v6 carries the
 #: MASQUE data plane while v4 endpoints flap between resets and timeouts)
-MASQUE_ENDPOINTS_V6 = ("2606:4700:103::2", "2606:4700:103::1")
+MASQUE_ENDPOINTS_V6 = (
+    "2606:4700:103::2", "2606:4700:103::1",
+    "2606:4700:104::2", "2606:4700:104::1",
+)
 MASQUE_PORT = 443
-#: ports the official client was observed trying (443 first, then the alternates)
-MASQUE_PORTS = (443, 500, 8095, 1701, 4500, 8443)
+#: ports the official client was observed trying (443 first, then the alternates).
+#: 4443 is in Cloudflare's MASQUE fallback list.
+MASQUE_PORTS = (443, 500, 1701, 4500, 4443, 8443, 8095)
 
 #: anycast prefixes the WARP wireguard endpoints live in (same list warp-plus uses)
 ENDPOINT_PREFIXES_V4 = (

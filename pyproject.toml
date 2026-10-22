@@ -29,3 +29,6 @@ Homepage = "https://github.com/yanxinwu946/waygate"
 
 [tool.setuptools]
 packages = ["waygate"]
+
+[tool.setuptools.package-data]
+waygate = ["static/*"]

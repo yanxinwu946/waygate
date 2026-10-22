@@ -517,7 +517,7 @@ async def command_multi(args: argparse.Namespace) -> int:
     webui_port = int(webui_port)
 
     state_path = DEFAULT_DATA_DIR / "pool.json"
-    saved = _load_pool(state_path)
+    saved, saved_settings = _load_state(state_path)
     holder: dict = {}
 
     def _persist() -> None:
@@ -538,6 +538,13 @@ async def command_multi(args: argparse.Namespace) -> int:
     # a dedicated device for scanning keeps the probe traffic away from the
     # instances that are actually serving
     scanner = EndpointScanner(DEFAULT_DATA_DIR / "identity-masque-scan.json")
+    if saved_settings:
+        scanner.configure(
+            profile=saved_settings.get("scan_profile"),
+            family=saved_settings.get("scan_family"),
+            ports=saved_settings.get("scan_ports"),
+            concurrency=saved_settings.get("scan_concurrency"),
+        )
     pool = WarpPool(
         DEFAULT_DATA_DIR,
         count=count,
@@ -548,6 +555,8 @@ async def command_multi(args: argparse.Namespace) -> int:
         saved=saved,
         on_change=_persist,
         front_port=args.front_port or None,
+        routing_mode=saved_settings.get("routing_mode") or "least_load",
+        placement_mode=saved_settings.get("placement_mode") or "unique_ip",
     )
     holder["pool"] = pool
     # --instances only changes *how many* instances there are; the saved names,
@@ -569,7 +578,7 @@ async def command_multi(args: argparse.Namespace) -> int:
     if pool.front_error:
         print(f"  front    : {front_url} FAILED ({pool.front_error})")
     else:
-        print(f"  front    : {front_url}  (least-loaded instance)")
+        print(f"  front    : {front_url}  ({pool.routing_mode})")
     print(f"  instances: {len(pool.instances)} (SOCKS5 ports {args.base_port}.."
           f"{args.base_port + len(pool.instances) - 1})")
     for instance in pool.instances:
@@ -591,12 +600,21 @@ async def command_multi(args: argparse.Namespace) -> int:
 
 def _load_pool(path: Path) -> Optional[list]:
     """Read the saved instance list (name, port, pinned endpoint)."""
+    instances, _settings = _load_state(path)
+    return instances
+
+
+def _load_state(path: Path) -> tuple[Optional[list], dict]:
+    """Read instances and console settings from pool.json."""
     try:
         data = json.loads(path.read_text())
     except Exception:  # noqa: BLE001
-        return None
+        return None, {}
     instances = data.get("instances")
-    return instances if isinstance(instances, list) and instances else None
+    if not (isinstance(instances, list) and instances):
+        instances = None
+    settings = data.get("settings") if isinstance(data.get("settings"), dict) else {}
+    return instances, settings
 
 
 def _save_pool(path: Path, pool) -> None:  # type: ignore[no-untyped-def]
@@ -606,9 +624,12 @@ def _save_pool(path: Path, pool) -> None:  # type: ignore[no-untyped-def]
     pinned endpoint was lost.
     """
     try:
-        snapshot = pool.snapshot() if hasattr(pool, "snapshot") else []
-        path.write_text(json.dumps(
-            {"count": len(pool.instances), "instances": snapshot}, indent=2))
+        if hasattr(pool, "export_state"):
+            payload = pool.export_state()
+        else:
+            snapshot = pool.snapshot() if hasattr(pool, "snapshot") else []
+            payload = {"count": len(pool.instances), "instances": snapshot}
+        path.write_text(json.dumps(payload, indent=2))
     except Exception:  # noqa: BLE001
         pass
 
